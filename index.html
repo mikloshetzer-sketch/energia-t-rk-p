@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="hu">
+<head>
+  <meta charset="utf-8" />
+  <title>EU energiaellátás – interaktív térkép</title>
+
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
+
+  <style>
+    body {
+      margin: 0;
+      font-family: Arial, sans-serif;
+    }
+    #map {
+      height: 90vh;
+      width: 100%;
+    }
+  </style>
+</head>
+<body>
+
+  <div id="map"></div>
+
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+
+  <script>
+    const map = L.map('map').setView([54, 15], 3);
+
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+      attribution: '© OpenStreetMap contributors'
+    }).addTo(map);
+
+    L.marker([47.4979, 19.0402])
+      .addTo(map)
+      .bindPopup('Teszt marker – Budapest')
+      .openPopup();
+  </script>
+
+</body>
+</html>
