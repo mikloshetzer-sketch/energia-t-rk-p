@@ -49,7 +49,6 @@
       display: inline-block;
       vertical-align: middle;
     }
-    .spark text { font-size: 10px; opacity: .8; }
   </style>
 </head>
 <body>
@@ -89,14 +88,14 @@
 
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/papaparse@5.4.1/papaparse.min.js"></script>
-  <!-- PNG export (Leaflet-image) -->
   <script src="https://unpkg.com/leaflet-image/leaflet-image.js"></script>
 
   <script>
-    // ======= Alaptérkép (CORS-barát tile, hogy PNG export működjön) =======
-    const map = L.map('map').setView([54, 15], 3);
+    // ======= Map (Canvas preferálás a biztos PNG exporthoz) =======
+    const map = L.map('map', { preferCanvas: true }).setView([54, 15], 3);
+    const canvasRenderer = L.canvas({ padding: 0.5 });
 
-    // Carto basemap általában CORS-kompatibilis; exportnál fontos a crossOrigin.
+    // CORS-barát tile, hogy a canvas export ne "tainted" legyen
     L.tileLayer('https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png', {
       attribution: '© OpenStreetMap • © CARTO',
       subdomains: 'abcd',
@@ -160,8 +159,7 @@
     };
 
     // ======= Choropleth (fix 5 sáv) =======
-    // 5 kategória szín (világos -> sötét)
-    const CHORO_COLORS = ['#e8f1ff', '#bfd7ff', '#86b4ff', '#3f86ff', '#0b3fbf']; // 5 sáv
+    const CHORO_COLORS = ['#e8f1ff', '#bfd7ff', '#86b4ff', '#3f86ff', '#0b3fbf'];
 
     function num(x){
       const v = Number(String(x ?? '').replace(',', '.'));
@@ -250,13 +248,11 @@
       const b4 = quantile(vs, 0.8);
       const min = vs[0];
       const max = vs[vs.length-1];
-      // breaks: [min, b1, b2, b3, b4, max]
       return [min, b1, b2, b3, b4, max];
     }
 
     function colorForValue(val, breaks){
-      if (val == null) return '#f6f7f9'; // "no data"
-      // breaks: 6 elem (min, b1, b2, b3, b4, max)
+      if (val == null || val === 0) return '#f6f7f9'; // "no data"
       if (val <= breaks[1]) return CHORO_COLORS[0];
       if (val <= breaks[2]) return CHORO_COLORS[1];
       if (val <= breaks[3]) return CHORO_COLORS[2];
@@ -378,12 +374,10 @@
 
         function fmt(x){
           if (x == null) return '–';
-          // rövid, de értelmezhető
           if (metric === 'value_eur_bn') return '€' + x.toFixed(2) + 'b';
           return x.toFixed(2) + ' Mt';
         }
 
-        // 5 sáv: [min..b1], (b1..b2], (b2..b3], (b3..b4], (b4..max]
         const rows = [
           {c: CHORO_COLORS[0], a: breaks[0], b: breaks[1]},
           {c: CHORO_COLORS[1], a: breaks[1], b: breaks[2]},
@@ -441,6 +435,8 @@
       if (layer) layer.remove();
 
       layer = L.geoJSON(countriesGeoJSON, {
+        renderer: canvasRenderer,
+
         style: (feature) => {
           const p = feature.properties || {};
           const name = p.ADMIN || p.name || '';
@@ -532,6 +528,7 @@
         if (!latlng) continue;
 
         const m = L.circleMarker(latlng, {
+          renderer: canvasRenderer,
           radius:7, color:'#000', weight:2, fillColor:'#0b3fbf', fillOpacity:0.95
         }).addTo(map)
           .bindPopup(`<b>${nameMap.get(iso2) || iso2}</b> <span class="tag">${iso2}</span><br>TOP 5 beszállító<br><b>${formatMetric(v, metricSel.value)}</b>`);
@@ -570,31 +567,37 @@
     metricSel.addEventListener('change', render);
     typeSel.addEventListener('change', render);
 
-    // ======= PNG export =======
+    // ======= PNG export (Canvas+idle) =======
     exportBtn.addEventListener('click', () => {
       exportBtn.disabled = true;
       exportBtn.textContent = 'Export...';
 
-      // leafletImage: a tile layer CORS és crossOrigin mellett jó eséllyel működik
-      leafletImage(map, function(err, canvas) {
-        exportBtn.disabled = false;
-        exportBtn.textContent = 'PNG export';
+      const doExport = () => {
+        setTimeout(() => {
+          leafletImage(map, function(err, canvas) {
+            exportBtn.disabled = false;
+            exportBtn.textContent = 'PNG export';
 
-        if (err || !canvas) {
-          alert('Nem sikerült a PNG export. (Gyakori ok: böngésző CORS/canvas korlátozás.)');
-          return;
-        }
+            if (err || !canvas) {
+              alert('Nem sikerült a PNG export. (Böngésző CORS/canvas korlátozás vagy renderelési hiba.)');
+              return;
+            }
 
-        const a = document.createElement('a');
-        const metric = metricSel.value;
-        const type = typeSel.value;
-        const ts = new Date().toISOString().slice(0,10);
-        a.download = `eu-energy-map_${type}_${metric}_${ts}.png`;
-        a.href = canvas.toDataURL('image/png');
-        document.body.appendChild(a);
-        a.click();
-        a.remove();
-      });
+            const a = document.createElement('a');
+            const metric = metricSel.value;
+            const type = typeSel.value;
+            const ts = new Date().toISOString().slice(0,10);
+            a.download = `eu-energy-map_${type}_${metric}_${ts}.png`;
+            a.href = canvas.toDataURL('image/png');
+            document.body.appendChild(a);
+            a.click();
+            a.remove();
+          });
+        }, 250);
+      };
+
+      map.once('idle', doExport);
+      map.invalidateSize();
     });
 
     loadAll().catch(err => {
