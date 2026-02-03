@@ -8,19 +8,61 @@
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
 
   <style>
-    body { margin: 0; font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif; }
-    #map { height: 82vh; width: 100%; }
+    body { margin: 0; font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif; color:#111; }
+    #map { height: 72vh; width: 100%; }
+
     .bar {
-      padding: 10px 12px; display: flex; gap: 12px; flex-wrap: wrap; align-items: center;
+      padding: 10px 12px;
+      display: flex; gap: 12px; flex-wrap: wrap; align-items: center;
       border-bottom: 1px solid #e6e6e6;
+      background: #fff;
+      position: sticky; top: 0; z-index: 999;
     }
     select { padding: 6px 10px; }
     .note { font-size: 12px; opacity: 0.75; }
+
     .legend {
       background: white; padding: 10px 12px; border-radius: 10px; line-height: 1.2;
       box-shadow: 0 4px 18px rgba(0,0,0,0.12);
     }
     .legend .row { display:flex; justify-content: space-between; gap: 12px; }
+
+    .panel {
+      border-top: 1px solid #e6e6e6;
+      padding: 12px;
+      background: #fff;
+    }
+    .panel h3 {
+      margin: 0 0 8px 0;
+      font-size: 14px;
+    }
+    .panel .sub {
+      font-size: 12px;
+      opacity: 0.75;
+      margin-bottom: 10px;
+    }
+    table {
+      border-collapse: collapse;
+      width: 100%;
+      max-width: 760px;
+    }
+    th, td {
+      text-align: left;
+      padding: 8px 10px;
+      border-bottom: 1px solid #eee;
+      font-size: 13px;
+      vertical-align: top;
+    }
+    th { font-size: 12px; opacity: 0.8; text-transform: uppercase; letter-spacing: .02em; }
+    .tag {
+      display:inline-block;
+      font-size: 11px;
+      padding: 2px 8px;
+      border-radius: 999px;
+      background: #f2f4f7;
+      margin-left: 8px;
+    }
+    .muted { opacity: 0.75; }
   </style>
 </head>
 <body>
@@ -41,10 +83,16 @@
       </select>
     </label>
 
-    <span class="note">Forrás: Eurostat / Comext Q3 2025</span>
+    <span class="note">Forrás: Eurostat / Comext – Q3 2025</span>
   </div>
 
   <div id="map"></div>
+
+  <div class="panel">
+    <h3 id="topTitle">TOP 5 beszállító</h3>
+    <div class="sub" id="topSub">—</div>
+    <div id="top5"></div>
+  </div>
 
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/papaparse@5.4.1/papaparse.min.js"></script>
@@ -63,6 +111,10 @@
     const metricSel = document.getElementById('metric');
     const typeSel   = document.getElementById('energyType');
 
+    const topTitle = document.getElementById('topTitle');
+    const topSub   = document.getElementById('topSub');
+    const topBox   = document.getElementById('top5');
+
     // ISO2 fallback mapping (ha a GeoJSON nem ad kódot)
     const ISO_FALLBACK = {
       "UNITED STATES OF AMERICA": "US",
@@ -80,9 +132,7 @@
       "BOLIVIA": "BO",
       "TANZANIA": "TZ",
       "SYRIA": "SY",
-      "CZECHIA": "CZ",
-      "EGYPT": "EG",
-      "NETHERLANDS": "NL"
+      "CZECHIA": "CZ"
     };
 
     function num(x) {
@@ -90,6 +140,7 @@
       return Number.isFinite(v) ? v : null;
     }
 
+    // CSV-ből index: (ISO2|energy_type) -> adat
     function buildIndex(rows) {
       const idx = new Map();
       for (const r of rows) {
@@ -100,13 +151,24 @@
         const key = iso2 + '|' + t;
         idx.set(key, {
           iso2,
-          country: r.country || iso2,
+          country: String(r.country || iso2).trim(),
           energy_type: t,
           quantity_mt: num(r.quantity_mt),
           value_eur_bn: num(r.value_eur_bn)
         });
       }
       return idx;
+    }
+
+    // ISO2 -> country név (CSV-ből)
+    function buildCountryNameMap(rows) {
+      const m = new Map();
+      for (const r of rows) {
+        const iso2 = String(r.iso2 || '').trim().toUpperCase();
+        const c = String(r.country || '').trim();
+        if (iso2 && c && !m.has(iso2)) m.set(iso2, c);
+      }
+      return m;
     }
 
     function getScale(values) {
@@ -117,8 +179,9 @@
       return {min, max: (max === min ? min + 1 : max)};
     }
 
+    // egyszerű, kontrasztos kitöltés: adat -> átlátszóság
     function shade(val, min, max) {
-      if (val == null) return 0.12;
+      if (val == null) return 0.08;
       const t = Math.max(0, Math.min(1, (val - min) / (max - min)));
       return 0.25 + 0.65 * t;
     }
@@ -129,15 +192,108 @@
       return v.toFixed(2) + ' Mt';
     }
 
+    function metricLabel(metric) {
+      return metric === 'value_eur_bn' ? 'Érték (€ mrd)' : 'Mennyiség (Mt)';
+    }
+
+    // adott ISO2-hez kiszámoljuk az értéket (összes vagy típus szerint)
+    function computeForCountry(iso2, idx, metric, chosenType) {
+      if (!iso2) return { value: null, breakdown: [] };
+
+      if (chosenType !== 'ALL') {
+        const it = idx.get(iso2 + '|' + chosenType);
+        return {
+          value: it ? it[metric] : null,
+          breakdown: it ? [it] : []
+        };
+      }
+
+      // ALL: összegzés + részletezés
+      const items = [];
+      for (const v of idx.values()) if (v.iso2 === iso2) items.push(v);
+      if (items.length === 0) return { value: null, breakdown: [] };
+
+      let sum = 0, any = false;
+      for (const it of items) {
+        if (it[metric] != null) { sum += it[metric]; any = true; }
+      }
+      items.sort((a,b)=> (b[metric] ?? -Infinity) - (a[metric] ?? -Infinity));
+      return { value: any ? sum : null, breakdown: items };
+    }
+
+    function noDataExplanation(chosenType) {
+      const t = chosenType === 'ALL' ? 'az adott energiatípus(ok)ban' : `(${chosenType})`;
+      return `EU-import: nincs regisztrált szállítás ${t} a vizsgált időszakban (Q3 2025).`;
+    }
+
+    function renderTop5(idx, nameMap) {
+      const metric = metricSel.value;
+      const chosenType = typeSel.value;
+
+      const totals = new Map(); // iso2 -> value
+      const typeText = chosenType === 'ALL' ? 'Összes energiatípus' : chosenType;
+
+      // iso2 lista az indexből
+      const isoSet = new Set();
+      for (const v of idx.values()) isoSet.add(v.iso2);
+
+      for (const iso2 of isoSet) {
+        const { value } = computeForCountry(iso2, idx, metric, chosenType);
+        if (value != null && value > 0) totals.set(iso2, value);
+      }
+
+      const arr = Array.from(totals.entries())
+        .sort((a,b)=> b[1] - a[1])
+        .slice(0, 5);
+
+      topTitle.textContent = 'TOP 5 beszállító';
+      topSub.textContent = `${typeText} • ${metricLabel(metric)} • Q3 2025`;
+
+      if (arr.length === 0) {
+        topBox.innerHTML = `<div class="muted">Nincs megjeleníthető TOP lista a jelenlegi szűrőkkel.</div>`;
+        return;
+      }
+
+      const rowsHtml = arr.map(([iso2, v], i) => {
+        const name = nameMap.get(iso2) || iso2;
+        return `
+          <tr>
+            <td><b>${i+1}.</b></td>
+            <td><b>${name}</b> <span class="tag">${iso2}</span></td>
+            <td><b>${formatMetric(v, metric)}</b></td>
+          </tr>
+        `;
+      }).join('');
+
+      topBox.innerHTML = `
+        <table>
+          <thead>
+            <tr>
+              <th>#</th>
+              <th>Ország</th>
+              <th>${metricLabel(metric)}</th>
+            </tr>
+          </thead>
+          <tbody>${rowsHtml}</tbody>
+        </table>
+      `;
+    }
+
     function render() {
       const metric = metricSel.value;
       const chosenType = typeSel.value;
-      const idx = buildIndex(energyRows);
 
+      const idx = buildIndex(energyRows);
+      const nameMap = buildCountryNameMap(energyRows);
+
+      // skálához értékek
       const vals = [];
-      for (const v of idx.values()) {
-        if (chosenType !== 'ALL' && v.energy_type !== chosenType) continue;
-        vals.push(v[metric]);
+      const isoSet = new Set();
+      for (const v of idx.values()) isoSet.add(v.iso2);
+
+      for (const iso2 of isoSet) {
+        const { value } = computeForCountry(iso2, idx, metric, chosenType);
+        if (value != null) vals.push(value);
       }
       const {min, max} = getScale(vals);
 
@@ -154,74 +310,79 @@
             iso2 = ISO_FALLBACK[key] || '';
           }
 
-          let val = null;
-
-          if (chosenType === 'ALL') {
-            let sum = 0;
-            let any = false;
-            for (const v of idx.values()) {
-              if (v.iso2 !== iso2) continue;
-              if (v[metric] != null) { sum += v[metric]; any = true; }
-            }
-            val = any ? sum : null;
-          } else {
-            const got = idx.get(iso2 + '|' + chosenType);
-            val = got ? got[metric] : null;
-          }
+          const { value } = computeForCountry(iso2, idx, metric, chosenType);
 
           return {
-            color:'#444',
+            color:'#333',
             weight:1,
             fillColor:'#0057b8',
-            fillOpacity: shade(val, min, max)
+            fillOpacity: shade(value, min, max)
           };
         },
+
         onEachFeature: (feature, lyr) => {
           const p = feature.properties || {};
-          const name = p.ADMIN || p.name || 'Ország';
-          let iso2 = String(p.ISO_A2 || '').trim().toUpperCase();
+          const featureName = p.ADMIN || p.name || 'Ország';
 
+          let iso2 = String(p.ISO_A2 || '').trim().toUpperCase();
           if (!iso2 || iso2 === '-99') {
-            const key = String(name).toUpperCase();
+            const key = String(featureName).toUpperCase();
             iso2 = ISO_FALLBACK[key] || '';
           }
 
-          function tooltipHtml() {
+          const displayName = (iso2 && nameMap.get(iso2)) ? nameMap.get(iso2) : featureName;
+
+          function tooltipHtml(detailed=false) {
             const metric = metricSel.value;
             const chosenType = typeSel.value;
-            const idx = buildIndex(energyRows);
 
-            if (!iso2) return `<b>${name}</b><br><i>Nincs adat</i>`;
+            const { value, breakdown } = computeForCountry(iso2, idx, metric, chosenType);
 
-            if (chosenType === 'ALL') {
-              let sum = 0, any = false;
-              for (const v of idx.values()) {
-                if (v.iso2 !== iso2) continue;
-                if (v[metric] != null) { sum += v[metric]; any = true; }
-              }
-              if (!any) return `<b>${name}</b> (${iso2})<br><i>Nincs adat</i>`;
-              return `<b>${name}</b> (${iso2})<br><b>Összes</b>: ${formatMetric(sum, metric)}`;
+            const header = `<b>${displayName}</b> <span class="tag">${iso2 || '—'}</span>`;
+
+            if (!iso2) {
+              return `${header}<br><span class="muted">Nincs országkód, ezért nem párosítható az adattal.</span>`;
+            }
+
+            if (value == null || value === 0) {
+              return `${header}<br><span class="muted">${noDataExplanation(chosenType)}</span>`;
+            }
+
+            if (chosenType !== 'ALL') {
+              return `${header}<br><b>${chosenType}</b>: ${formatMetric(value, metric)}`;
+            }
+
+            // ALL
+            if (!detailed) {
+              // rövid: összeg + top 2 típus
+              const top2 = breakdown.slice(0, 2)
+                .map(it => `${it.energy_type}: ${formatMetric(it[metric], metric)}`)
+                .join('<br>');
+              return `${header}<br><b>Összes</b>: ${formatMetric(value, metric)}<br>${top2}`;
             } else {
-              const it = idx.get(iso2 + '|' + chosenType);
-              if (!it) return `<b>${name}</b> (${iso2})<br><i>Nincs adat</i>`;
-              return `<b>${name}</b> (${iso2})<br><b>${chosenType}</b>: ${formatMetric(it[metric], metric)}`;
+              // részletes: minden típus listában
+              const lines = breakdown
+                .map(it => `${it.energy_type}: <b>${formatMetric(it[metric], metric)}</b>`)
+                .join('<br>');
+              return `${header}<br><b>Összes</b>: ${formatMetric(value, metric)}<br><br>${lines}`;
             }
           }
 
-          // Hover tooltip
-          lyr.bindTooltip(tooltipHtml, { sticky: true, direction: 'auto', opacity: 0.95 });
+          // Hover tooltip (gyors infó)
+          lyr.bindTooltip(() => tooltipHtml(false), { sticky: true, direction: 'auto', opacity: 0.95 });
 
           // Hover kiemelés
           lyr.on('mouseover', () => lyr.setStyle({ weight: 2 }));
           lyr.on('mouseout', () => lyr.setStyle({ weight: 1 }));
 
-          // Kattintás popup
+          // Kattintás: részletes popup
           lyr.on('click', () => {
-            lyr.bindPopup(tooltipHtml()).openPopup();
+            lyr.bindPopup(tooltipHtml(true)).openPopup();
           });
         }
       }).addTo(map);
 
+      // Legend
       if (window._legend) window._legend.remove();
       const legend = L.control({position:'bottomright'});
       legend.onAdd = () => {
@@ -235,6 +396,9 @@
       };
       legend.addTo(map);
       window._legend = legend;
+
+      // TOP 5 panel
+      renderTop5(idx, nameMap);
     }
 
     async function loadAll() {
@@ -255,6 +419,7 @@
         });
       });
 
+      // energiatípusok feltöltése
       const types = Array.from(new Set(
         energyRows.map(r => String(r.energy_type || '').trim()).filter(Boolean)
       )).sort();
@@ -274,7 +439,7 @@
 
     loadAll().catch(err => {
       console.error(err);
-      alert('Hiba betöltés közben. Ellenőrizd, hogy energy_data.csv fent van-e a repó gyökerében.');
+      alert('Hiba betöltés közben. Ellenőrizd, hogy az energy_data.csv a repó gyökerében van-e.');
     });
   </script>
 </body>
