@@ -11,58 +11,30 @@
     body { margin: 0; font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif; color:#111; }
     #map { height: 72vh; width: 100%; }
 
-    .bar {
-      padding: 10px 12px;
-      display: flex; gap: 12px; flex-wrap: wrap; align-items: center;
-      border-bottom: 1px solid #e6e6e6;
-      background: #fff;
-      position: sticky; top: 0; z-index: 999;
+    .bar{
+      padding:10px 12px; display:flex; gap:12px; flex-wrap:wrap; align-items:center;
+      border-bottom:1px solid #e6e6e6; background:#fff; position:sticky; top:0; z-index:999;
     }
-    select { padding: 6px 10px; }
-    .note { font-size: 12px; opacity: 0.75; }
+    select{ padding:6px 10px; }
+    .note{ font-size:12px; opacity:.75; }
 
-    .legend {
-      background: white; padding: 10px 12px; border-radius: 10px; line-height: 1.2;
-      box-shadow: 0 4px 18px rgba(0,0,0,0.12);
+    .legend{
+      background:#fff; padding:10px 12px; border-radius:10px; line-height:1.2;
+      box-shadow:0 4px 18px rgba(0,0,0,.12);
     }
-    .legend .row { display:flex; justify-content: space-between; gap: 12px; }
+    .legend .row{ display:flex; justify-content:space-between; gap:12px; }
 
-    .panel {
-      border-top: 1px solid #e6e6e6;
-      padding: 12px;
-      background: #fff;
-    }
-    .panel h3 {
-      margin: 0 0 8px 0;
-      font-size: 14px;
-    }
-    .panel .sub {
-      font-size: 12px;
-      opacity: 0.75;
-      margin-bottom: 10px;
-    }
-    table {
-      border-collapse: collapse;
-      width: 100%;
-      max-width: 760px;
-    }
-    th, td {
-      text-align: left;
-      padding: 8px 10px;
-      border-bottom: 1px solid #eee;
-      font-size: 13px;
-      vertical-align: top;
-    }
-    th { font-size: 12px; opacity: 0.8; text-transform: uppercase; letter-spacing: .02em; }
-    .tag {
-      display:inline-block;
-      font-size: 11px;
-      padding: 2px 8px;
-      border-radius: 999px;
-      background: #f2f4f7;
-      margin-left: 8px;
-    }
-    .muted { opacity: 0.75; }
+    .panel{ border-top:1px solid #e6e6e6; padding:12px; background:#fff; }
+    .panel h3{ margin:0 0 8px 0; font-size:14px; }
+    .panel .sub{ font-size:12px; opacity:.75; margin-bottom:10px; }
+
+    table{ border-collapse:collapse; width:100%; max-width:820px; }
+    th, td{ text-align:left; padding:8px 10px; border-bottom:1px solid #eee; font-size:13px; vertical-align:top; }
+    th{ font-size:12px; opacity:.8; text-transform:uppercase; letter-spacing:.02em; }
+    .tag{ display:inline-block; font-size:11px; padding:2px 8px; border-radius:999px; background:#f2f4f7; margin-left:8px; }
+    .muted{ opacity:.75; }
+    tr.clickable{ cursor:pointer; }
+    tr.clickable:hover{ background:#f7f9fc; }
   </style>
 </head>
 <body>
@@ -92,64 +64,81 @@
     <h3 id="topTitle">TOP 5 beszállító</h3>
     <div class="sub" id="topSub">—</div>
     <div id="top5"></div>
+    <div class="sub muted" style="margin-top:8px;">
+      Tipp: kattints a TOP 5 listában egy országra → a térkép odaugrik és felnyitja az adatokat.
+    </div>
   </div>
 
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/papaparse@5.4.1/papaparse.min.js"></script>
 
   <script>
-    // Alaptérkép
     const map = L.map('map').setView([54, 15], 3);
-    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-      attribution: '© OpenStreetMap'
-    }).addTo(map);
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { attribution: '© OpenStreetMap' }).addTo(map);
 
     let countriesGeoJSON = null;
     let energyRows = [];
     let layer = null;
 
+    // ISO2 -> Leaflet layer (hogy a TOP listából rá tudjunk zoomolni)
+    const isoLayerMap = new Map();
+
+    // TOP marker fallback (ha nincs polygon)
+    const topFallbackMarkers = new Map();
+
     const metricSel = document.getElementById('metric');
     const typeSel   = document.getElementById('energyType');
-
     const topTitle = document.getElementById('topTitle');
     const topSub   = document.getElementById('topSub');
     const topBox   = document.getElementById('top5');
 
-    // ISO2 fallback mapping (ha a GeoJSON nem ad kódot)
+    // GeoJSON ISO2 hiány esetére (név -> ISO2)
     const ISO_FALLBACK = {
-      "UNITED STATES OF AMERICA": "US",
-      "UNITED STATES": "US",
-      "RUSSIA": "RU",
-      "UNITED KINGDOM": "GB",
-      "GREAT BRITAIN": "GB",
-      "NORWAY": "NO",
-      "QATAR": "QA",
-      "ALGERIA": "DZ",
-      "SOUTH KOREA": "KR",
-      "IRAN": "IR",
-      "VIETNAM": "VN",
-      "VENEZUELA": "VE",
-      "BOLIVIA": "BO",
-      "TANZANIA": "TZ",
-      "SYRIA": "SY",
-      "CZECHIA": "CZ"
+      "UNITED STATES OF AMERICA":"US",
+      "UNITED STATES":"US",
+      "RUSSIA":"RU",
+      "UNITED KINGDOM":"GB",
+      "GREAT BRITAIN":"GB",
+      "NORWAY":"NO",
+      "QATAR":"QA",
+      "ALGERIA":"DZ",
+      "SAUDI ARABIA":"SA",
+      "CHINA":"CN",
+      "SOUTH KOREA":"KR",
+      "IRAN":"IR",
+      "VIETNAM":"VN",
+      "VENEZUELA":"VE",
+      "BOLIVIA":"BO",
+      "TANZANIA":"TZ",
+      "SYRIA":"SY",
+      "CZECHIA":"CZ"
     };
 
-    function num(x) {
+    // Ha polygon nincs: ide tesszük a TOP országok hozzávetőleges koordinátáját
+    // (csak akkor használjuk, ha tényleg nem találunk polygon layer-t)
+    const CENTROID_FALLBACK = {
+      "SA":[23.8859, 45.0792], // Saudi Arabia
+      "CN":[35.8617, 104.1954], // China
+      "QA":[25.3548, 51.1839],
+      "DZ":[28.0339, 1.6596],
+      "NO":[60.4720, 8.4689],
+      "US":[39.8283, -98.5795],
+      "RU":[61.5240, 105.3188],
+      "AE":[23.4241, 53.8478] // UAE, ha előfordulna
+    };
+
+    function num(x){
       const v = Number(String(x ?? '').replace(',', '.'));
       return Number.isFinite(v) ? v : null;
     }
 
-    // CSV-ből index: (ISO2|energy_type) -> adat
-    function buildIndex(rows) {
+    function buildIndex(rows){
       const idx = new Map();
-      for (const r of rows) {
+      for (const r of rows){
         const iso2 = String(r.iso2 || '').trim().toUpperCase();
         const t = String(r.energy_type || '').trim();
         if (!iso2 || !t) continue;
-
-        const key = iso2 + '|' + t;
-        idx.set(key, {
+        idx.set(iso2 + '|' + t, {
           iso2,
           country: String(r.country || iso2).trim(),
           energy_type: t,
@@ -160,10 +149,9 @@
       return idx;
     }
 
-    // ISO2 -> country név (CSV-ből)
-    function buildCountryNameMap(rows) {
+    function buildCountryNameMap(rows){
       const m = new Map();
-      for (const r of rows) {
+      for (const r of rows){
         const iso2 = String(r.iso2 || '').trim().toUpperCase();
         const c = String(r.country || '').trim();
         if (iso2 && c && !m.has(iso2)) m.set(iso2, c);
@@ -171,93 +159,89 @@
       return m;
     }
 
-    function getScale(values) {
-      const vs = values.filter(v => v != null).sort((a,b)=>a-b);
-      if (vs.length === 0) return {min:0, max:1};
-      const min = vs[0];
-      const max = vs[vs.length-1];
-      return {min, max: (max === min ? min + 1 : max)};
+    function metricLabel(metric){ return metric === 'value_eur_bn' ? 'Érték (€ mrd)' : 'Mennyiség (Mt)'; }
+
+    function formatMetric(v, metric){
+      if (v == null) return '–';
+      return metric === 'value_eur_bn' ? ('€' + v.toFixed(2) + ' mrd') : (v.toFixed(2) + ' Mt');
     }
 
-    // egyszerű, kontrasztos kitöltés: adat -> átlátszóság
-    function shade(val, min, max) {
+    function getScale(values){
+      const vs = values.filter(v => v != null).sort((a,b)=>a-b);
+      if (vs.length === 0) return {min:0, max:1};
+      const min = vs[0], max0 = vs[vs.length-1];
+      return {min, max: (max0 === min ? min + 1 : max0)};
+    }
+
+    function shade(val, min, max){
       if (val == null) return 0.08;
       const t = Math.max(0, Math.min(1, (val - min) / (max - min)));
       return 0.25 + 0.65 * t;
     }
 
-    function formatMetric(v, metric) {
-      if (v == null) return '–';
-      if (metric === 'value_eur_bn') return '€' + v.toFixed(2) + ' mrd';
-      return v.toFixed(2) + ' Mt';
+    function noDataExplanation(chosenType){
+      const t = chosenType === 'ALL' ? 'az adott energiatípus(ok)ban' : `(${chosenType})`;
+      return `EU-import: nincs regisztrált szállítás ${t} a vizsgált időszakban (Q3 2025).`;
     }
 
-    function metricLabel(metric) {
-      return metric === 'value_eur_bn' ? 'Érték (€ mrd)' : 'Mennyiség (Mt)';
-    }
+    function computeForCountry(iso2, idx, metric, chosenType){
+      if (!iso2) return { value:null, breakdown:[] };
 
-    // adott ISO2-hez kiszámoljuk az értéket (összes vagy típus szerint)
-    function computeForCountry(iso2, idx, metric, chosenType) {
-      if (!iso2) return { value: null, breakdown: [] };
-
-      if (chosenType !== 'ALL') {
+      if (chosenType !== 'ALL'){
         const it = idx.get(iso2 + '|' + chosenType);
-        return {
-          value: it ? it[metric] : null,
-          breakdown: it ? [it] : []
-        };
+        return { value: it ? it[metric] : null, breakdown: it ? [it] : [] };
       }
 
-      // ALL: összegzés + részletezés
       const items = [];
       for (const v of idx.values()) if (v.iso2 === iso2) items.push(v);
-      if (items.length === 0) return { value: null, breakdown: [] };
+      if (items.length === 0) return { value:null, breakdown:[] };
 
       let sum = 0, any = false;
-      for (const it of items) {
-        if (it[metric] != null) { sum += it[metric]; any = true; }
+      for (const it of items){
+        if (it[metric] != null){ sum += it[metric]; any = true; }
       }
       items.sort((a,b)=> (b[metric] ?? -Infinity) - (a[metric] ?? -Infinity));
       return { value: any ? sum : null, breakdown: items };
     }
 
-    function noDataExplanation(chosenType) {
-      const t = chosenType === 'ALL' ? 'az adott energiatípus(ok)ban' : `(${chosenType})`;
-      return `EU-import: nincs regisztrált szállítás ${t} a vizsgált időszakban (Q3 2025).`;
-    }
-
-    function renderTop5(idx, nameMap) {
+    // TOP 5 számítás: visszaadja a listát + set-et a kiemeléshez
+    function getTop5(idx){
       const metric = metricSel.value;
       const chosenType = typeSel.value;
 
-      const totals = new Map(); // iso2 -> value
-      const typeText = chosenType === 'ALL' ? 'Összes energiatípus' : chosenType;
-
-      // iso2 lista az indexből
       const isoSet = new Set();
       for (const v of idx.values()) isoSet.add(v.iso2);
 
-      for (const iso2 of isoSet) {
+      const totals = [];
+      for (const iso2 of isoSet){
         const { value } = computeForCountry(iso2, idx, metric, chosenType);
-        if (value != null && value > 0) totals.set(iso2, value);
+        if (value != null && value > 0) totals.push([iso2, value]);
       }
 
-      const arr = Array.from(totals.entries())
-        .sort((a,b)=> b[1] - a[1])
-        .slice(0, 5);
+      totals.sort((a,b)=> b[1] - a[1]);
+      const top = totals.slice(0, 5);
+
+      const topSet = new Set(top.map(x => x[0]));
+      return { top, topSet };
+    }
+
+    function renderTop5(top, nameMap){
+      const metric = metricSel.value;
+      const chosenType = typeSel.value;
+      const typeText = chosenType === 'ALL' ? 'Összes energiatípus' : chosenType;
 
       topTitle.textContent = 'TOP 5 beszállító';
       topSub.textContent = `${typeText} • ${metricLabel(metric)} • Q3 2025`;
 
-      if (arr.length === 0) {
+      if (top.length === 0){
         topBox.innerHTML = `<div class="muted">Nincs megjeleníthető TOP lista a jelenlegi szűrőkkel.</div>`;
         return;
       }
 
-      const rowsHtml = arr.map(([iso2, v], i) => {
+      const rowsHtml = top.map(([iso2, v], i) => {
         const name = nameMap.get(iso2) || iso2;
         return `
-          <tr>
+          <tr class="clickable" data-iso2="${iso2}" data-rank="${i+1}">
             <td><b>${i+1}.</b></td>
             <td><b>${name}</b> <span class="tag">${iso2}</span></td>
             <td><b>${formatMetric(v, metric)}</b></td>
@@ -268,35 +252,72 @@
       topBox.innerHTML = `
         <table>
           <thead>
-            <tr>
-              <th>#</th>
-              <th>Ország</th>
-              <th>${metricLabel(metric)}</th>
-            </tr>
+            <tr><th>#</th><th>Ország</th><th>${metricLabel(metric)}</th></tr>
           </thead>
           <tbody>${rowsHtml}</tbody>
         </table>
       `;
+
+      // kattintás: zoom + popup
+      topBox.querySelectorAll('tr.clickable').forEach(tr => {
+        tr.addEventListener('click', () => {
+          const iso2 = tr.getAttribute('data-iso2');
+          focusCountry(iso2);
+        });
+      });
     }
 
-    function render() {
+    function clearTopFallbackMarkers(){
+      for (const m of topFallbackMarkers.values()) m.remove();
+      topFallbackMarkers.clear();
+    }
+
+    function focusCountry(iso2){
+      // 1) ha van polygon layer: odazoomol + popup
+      const lyr = isoLayerMap.get(iso2);
+      if (lyr){
+        try {
+          map.fitBounds(lyr.getBounds(), { padding:[30,30] });
+          lyr.openPopup();
+          return;
+        } catch(e) {}
+      }
+
+      // 2) ha nincs polygon: fallback marker koordinátával
+      const latlng = CENTROID_FALLBACK[iso2];
+      if (latlng){
+        map.setView(latlng, 4);
+        const m = topFallbackMarkers.get(iso2);
+        if (m) m.openPopup();
+        return;
+      }
+
+      alert('Ehhez az országhoz nem találok térképi objektumot (GeoJSON), és nincs fallback koordináta sem.');
+    }
+
+    function render(){
       const metric = metricSel.value;
       const chosenType = typeSel.value;
 
       const idx = buildIndex(energyRows);
       const nameMap = buildCountryNameMap(energyRows);
 
-      // skálához értékek
-      const vals = [];
-      const isoSet = new Set();
-      for (const v of idx.values()) isoSet.add(v.iso2);
+      // TOP 5 előre (kiemeléshez is kell)
+      const { top, topSet } = getTop5(idx);
 
-      for (const iso2 of isoSet) {
+      // skála
+      const vals = [];
+      const isoSetAll = new Set();
+      for (const v of idx.values()) isoSetAll.add(v.iso2);
+      for (const iso2 of isoSetAll){
         const { value } = computeForCountry(iso2, idx, metric, chosenType);
         if (value != null) vals.push(value);
       }
       const {min, max} = getScale(vals);
 
+      // régi rétegek törlése
+      isoLayerMap.clear();
+      clearTopFallbackMarkers();
       if (layer) layer.remove();
 
       layer = L.geoJSON(countriesGeoJSON, {
@@ -305,17 +326,19 @@
           const name = p.ADMIN || p.name || '';
           let iso2 = String(p.ISO_A2 || '').trim().toUpperCase();
 
-          if (!iso2 || iso2 === '-99') {
+          if (!iso2 || iso2 === '-99'){
             const key = String(name).toUpperCase();
             iso2 = ISO_FALLBACK[key] || '';
           }
 
           const { value } = computeForCountry(iso2, idx, metric, chosenType);
 
+          const isTop = topSet.has(iso2);
+
           return {
-            color:'#333',
-            weight:1,
-            fillColor:'#0057b8',
+            color: isTop ? '#000' : '#333',
+            weight: isTop ? 2.5 : 1,
+            fillColor: '#0057b8',
             fillOpacity: shade(value, min, max)
           };
         },
@@ -325,42 +348,41 @@
           const featureName = p.ADMIN || p.name || 'Ország';
 
           let iso2 = String(p.ISO_A2 || '').trim().toUpperCase();
-          if (!iso2 || iso2 === '-99') {
+          if (!iso2 || iso2 === '-99'){
             const key = String(featureName).toUpperCase();
             iso2 = ISO_FALLBACK[key] || '';
           }
 
+          // eltároljuk a layer-t, hogy a TOP listából rá tudjunk ugrani
+          if (iso2 && !isoLayerMap.has(iso2)) isoLayerMap.set(iso2, lyr);
+
           const displayName = (iso2 && nameMap.get(iso2)) ? nameMap.get(iso2) : featureName;
 
-          function tooltipHtml(detailed=false) {
+          function tooltipHtml(detailed=false){
             const metric = metricSel.value;
             const chosenType = typeSel.value;
-
             const { value, breakdown } = computeForCountry(iso2, idx, metric, chosenType);
 
             const header = `<b>${displayName}</b> <span class="tag">${iso2 || '—'}</span>`;
 
-            if (!iso2) {
+            if (!iso2){
               return `${header}<br><span class="muted">Nincs országkód, ezért nem párosítható az adattal.</span>`;
             }
 
-            if (value == null || value === 0) {
+            if (value == null || value === 0){
               return `${header}<br><span class="muted">${noDataExplanation(chosenType)}</span>`;
             }
 
-            if (chosenType !== 'ALL') {
+            if (chosenType !== 'ALL'){
               return `${header}<br><b>${chosenType}</b>: ${formatMetric(value, metric)}`;
             }
 
-            // ALL
-            if (!detailed) {
-              // rövid: összeg + top 2 típus
-              const top2 = breakdown.slice(0, 2)
+            if (!detailed){
+              const top2 = breakdown.slice(0,2)
                 .map(it => `${it.energy_type}: ${formatMetric(it[metric], metric)}`)
                 .join('<br>');
               return `${header}<br><b>Összes</b>: ${formatMetric(value, metric)}<br>${top2}`;
             } else {
-              // részletes: minden típus listában
               const lines = breakdown
                 .map(it => `${it.energy_type}: <b>${formatMetric(it[metric], metric)}</b>`)
                 .join('<br>');
@@ -368,14 +390,11 @@
             }
           }
 
-          // Hover tooltip (gyors infó)
-          lyr.bindTooltip(() => tooltipHtml(false), { sticky: true, direction: 'auto', opacity: 0.95 });
+          lyr.bindTooltip(() => tooltipHtml(false), { sticky:true, direction:'auto', opacity:0.95 });
 
-          // Hover kiemelés
-          lyr.on('mouseover', () => lyr.setStyle({ weight: 2 }));
-          lyr.on('mouseout', () => lyr.setStyle({ weight: 1 }));
+          lyr.on('mouseover', () => lyr.setStyle({ weight: topSet.has(iso2) ? 3 : 2 }));
+          lyr.on('mouseout',  () => lyr.setStyle({ weight: topSet.has(iso2) ? 2.5 : 1 }));
 
-          // Kattintás: részletes popup
           lyr.on('click', () => {
             lyr.bindPopup(tooltipHtml(true)).openPopup();
           });
@@ -398,33 +417,40 @@
       window._legend = legend;
 
       // TOP 5 panel
-      renderTop5(idx, nameMap);
+      renderTop5(top, nameMap);
+
+      // TOP 5 fallback markerek azoknak, akiknél nincs polygon layer
+      for (const [iso2, v] of top){
+        if (isoLayerMap.has(iso2)) continue;
+
+        const latlng = CENTROID_FALLBACK[iso2];
+        if (!latlng) continue;
+
+        const m = L.circleMarker(latlng, { radius: 7, color:'#000', weight:2, fillColor:'#0057b8', fillOpacity:0.9 })
+          .addTo(map)
+          .bindPopup(`<b>${nameMap.get(iso2) || iso2}</b> <span class="tag">${iso2}</span><br>TOP 5 beszállító<br><b>${formatMetric(v, metricSel.value)}</b>`);
+        topFallbackMarkers.set(iso2, m);
+      }
     }
 
-    async function loadAll() {
+    async function loadAll(){
       const countriesUrl = 'https://raw.githubusercontent.com/datasets/geo-countries/master/data/countries.geojson';
       const cRes = await fetch(countriesUrl);
       countriesGeoJSON = await cRes.json();
 
       await new Promise((resolve, reject) => {
         Papa.parse('./energy_data.csv', {
-          download: true,
-          header: true,
-          skipEmptyLines: true,
-          complete: (results) => {
-            energyRows = results.data || [];
-            resolve();
-          },
+          download:true, header:true, skipEmptyLines:true,
+          complete:(results)=>{ energyRows = results.data || []; resolve(); },
           error: reject
         });
       });
 
-      // energiatípusok feltöltése
       const types = Array.from(new Set(
         energyRows.map(r => String(r.energy_type || '').trim()).filter(Boolean)
       )).sort();
 
-      for (const t of types) {
+      for (const t of types){
         const opt = document.createElement('option');
         opt.value = t;
         opt.textContent = t;
