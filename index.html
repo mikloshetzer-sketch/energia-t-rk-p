@@ -2,39 +2,240 @@
 <html lang="hu">
 <head>
   <meta charset="utf-8" />
-  <title>EU energiaellátás – interaktív térkép</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>EU energiaimport – interaktív térkép</title>
 
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
 
   <style>
-    body {
-      margin: 0;
-      font-family: Arial, sans-serif;
+    body { margin: 0; font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif; }
+    #map { height: 82vh; width: 100%; }
+    .bar {
+      padding: 10px 12px; display: flex; gap: 12px; flex-wrap: wrap; align-items: center;
+      border-bottom: 1px solid #e6e6e6;
     }
-    #map {
-      height: 90vh;
-      width: 100%;
+    select { padding: 6px 10px; }
+    .note { font-size: 12px; opacity: 0.75; }
+    .legend {
+      background: white; padding: 10px 12px; border-radius: 10px; line-height: 1.2;
+      box-shadow: 0 4px 18px rgba(0,0,0,0.12);
     }
+    .legend .row { display:flex; justify-content: space-between; gap: 12px; }
   </style>
 </head>
 <body>
 
+  <div class="bar">
+    <label>
+      Mutató:
+      <select id="metric">
+        <option value="quantity_mt">Mennyiség (Mt)</option>
+        <option value="value_eur_bn">Érték (€ mrd)</option>
+      </select>
+    </label>
+
+    <label>
+      Energiatípus:
+      <select id="energyType">
+        <option value="ALL">Összes</option>
+      </select>
+    </label>
+
+    <span class="note">Forrás: Eurostat / Comext Q3 2025</span>
+  </div>
+
   <div id="map"></div>
 
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/papaparse@5.4.1/papaparse.min.js"></script>
 
   <script>
     const map = L.map('map').setView([54, 15], 3);
-
     L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-      attribution: '© OpenStreetMap contributors'
+      attribution: '© OpenStreetMap'
     }).addTo(map);
 
-    L.marker([47.4979, 19.0402])
-      .addTo(map)
-      .bindPopup('Teszt marker – Budapest')
-      .openPopup();
-  </script>
+    let countriesGeoJSON = null;
+    let energyRows = [];
+    let layer = null;
 
+    const metricSel = document.getElementById('metric');
+    const typeSel   = document.getElementById('energyType');
+
+    function num(x) {
+      const v = Number(String(x ?? '').replace(',', '.'));
+      return Number.isFinite(v) ? v : null;
+    }
+
+    function buildIndex(rows) {
+      const idx = new Map();
+      for (const r of rows) {
+        const iso2 = String(r.iso2 || '').trim().toUpperCase();
+        const t = String(r.energy_type || '').trim();
+        if (!iso2 || !t) continue;
+
+        const key = iso2 + '|' + t;
+        idx.set(key, {
+          iso2,
+          country: r.country || iso2,
+          energy_type: t,
+          quantity_mt: num(r.quantity_mt),
+          value_eur_bn: num(r.value_eur_bn)
+        });
+      }
+      return idx;
+    }
+
+    function getScale(values) {
+      const vs = values.filter(v => v != null).sort((a,b)=>a-b);
+      if (vs.length === 0) return {min:0, max:1};
+      const min = vs[0];
+      const max = vs[vs.length-1];
+      return {min, max: (max === min ? min + 1 : max)};
+    }
+
+    function shade(val, min, max) {
+      if (val == null) return 0.12;
+      const t = Math.max(0, Math.min(1, (val - min) / (max - min)));
+      return 0.25 + 0.65 * t;
+    }
+
+    function formatMetric(v, metric) {
+      if (v == null) return '–';
+      if (metric === 'value_eur_bn') return '€' + v.toFixed(2) + ' mrd';
+      return v.toFixed(2) + ' Mt';
+    }
+
+    function render() {
+      const metric = metricSel.value;
+      const chosenType = typeSel.value;
+      const idx = buildIndex(energyRows);
+
+      const vals = [];
+      for (const v of idx.values()) {
+        if (chosenType !== 'ALL' && v.energy_type !== chosenType) continue;
+        vals.push(v[metric]);
+      }
+      const {min, max} = getScale(vals);
+
+      if (layer) layer.remove();
+
+      layer = L.geoJSON(countriesGeoJSON, {
+        style: (feature) => {
+          const p = feature.properties || {};
+          const iso2 = String(p.ISO_A2 || '').trim().toUpperCase();
+
+          if (!iso2 || iso2 === '-99') {
+            return {color:'#666', weight:1, fillOpacity:0.05};
+          }
+
+          let val = null;
+
+          if (chosenType === 'ALL') {
+            let sum = 0;
+            let any = false;
+            for (const v of idx.values()) {
+              if (v.iso2 !== iso2) continue;
+              if (v[metric] != null) { sum += v[metric]; any = true; }
+            }
+            val = any ? sum : null;
+          } else {
+            const got = idx.get(iso2 + '|' + chosenType);
+            val = got ? got[metric] : null;
+          }
+
+          return {
+            color:'#444',
+            weight:1,
+            fillColor:'#0057b8',
+            fillOpacity: shade(val, min, max)
+          };
+        },
+        onEachFeature: (feature, lyr) => {
+          const p = feature.properties || {};
+          const name = p.ADMIN || p.name || 'Ország';
+          const iso2 = String(p.ISO_A2 || '').trim().toUpperCase();
+
+          lyr.on('click', () => {
+            const metric = metricSel.value;
+            const chosenType = typeSel.value;
+            const idx = buildIndex(energyRows);
+
+            let lines = [];
+            if (!iso2 || iso2 === '-99') {
+              lines.push('Nincs ISO2 kód ehhez a területhez.');
+            } else if (chosenType === 'ALL') {
+              const items = [];
+              for (const v of idx.values()) if (v.iso2 === iso2) items.push(v);
+              items.sort((a,b)=> (b[metric]??-Infinity) - (a[metric]??-Infinity));
+              if (items.length === 0) {
+                lines.push('Nincs adat ehhez az országhoz.');
+              } else {
+                for (const it of items) {
+                  lines.push(`${it.energy_type}: <b>${formatMetric(it[metric], metric)}</b>`);
+                }
+              }
+            } else {
+              const it = idx.get(iso2 + '|' + chosenType);
+              if (!it) lines.push('Nincs adat ehhez az országhoz/energiatípushoz.');
+              else lines.push(`${chosenType}: <b>${formatMetric(it[metric], metric)}</b>`);
+            }
+
+            lyr.bindPopup(
+              `<b>${name}</b> (${iso2 || '–'})<br>` + lines.join('<br>')
+            ).openPopup();
+          });
+        }
+      }).addTo(map);
+
+      if (window._legend) window._legend.remove();
+      const legend = L.control({position:'bottomright'});
+      legend.onAdd = () => {
+        const div = L.DomUtil.create('div', 'legend');
+        div.innerHTML = `
+          <div><b>Színezés</b></div>
+          <div class="row"><span>min</span><span>${formatMetric(min, metric)}</span></div>
+          <div class="row"><span>max</span><span>${formatMetric(max, metric)}</span></div>
+        `;
+        return div;
+      };
+      legend.addTo(map);
+      window._legend = legend;
+    }
+
+    async function loadAll() {
+      const countriesUrl = 'https://raw.githubusercontent.com/datasets/geo-countries/master/data/countries.geojson';
+      const cRes = await fetch(countriesUrl);
+      countriesGeoJSON = await cRes.json();
+
+      await new Promise((resolve, reject) => {
+        Papa.parse('./energy_data.csv', {
+          download: true,
+          header: true,
+          skipEmptyLines: true,
+          complete: (results) => {
+            energyRows = results.data || [];
+            resolve();
+          },
+          error: reject
+        });
+      });
+
+      const types = Array.from(new Set(energyRows.map(r => String(r.energy_type || '').trim()).filter(Boolean))).sort();
+      for (const t of types) {
+        const opt = document.createElement('option');
+        opt.value = t;
+        opt.textContent = t;
+        typeSel.appendChild(opt);
+      }
+
+      render();
+    }
+
+    loadAll().catch(err => {
+      console.error(err);
+      alert('Hiba betöltés közben. Ellenőrizd, hogy energy_data.csv fent van-e a repó root-jában.');
+    });
+  </script>
 </body>
 </html>
