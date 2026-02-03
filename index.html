@@ -15,26 +15,41 @@
       padding:10px 12px; display:flex; gap:12px; flex-wrap:wrap; align-items:center;
       border-bottom:1px solid #e6e6e6; background:#fff; position:sticky; top:0; z-index:999;
     }
-    select{ padding:6px 10px; }
+    select, button{ padding:6px 10px; }
+    button{ cursor:pointer; border:1px solid #d0d7de; background:#fff; border-radius:8px; }
+    button:hover{ background:#f6f8fa; }
     .note{ font-size:12px; opacity:.75; }
+    .spacer{ flex:1; }
 
     .legend{
       background:#fff; padding:10px 12px; border-radius:10px; line-height:1.2;
       box-shadow:0 4px 18px rgba(0,0,0,.12);
+      min-width: 190px;
     }
-    .legend .row{ display:flex; justify-content:space-between; gap:12px; }
+    .legend .title{ font-weight: 700; margin-bottom: 6px; }
+    .legend .row{ display:flex; align-items:center; justify-content:space-between; gap:10px; margin:4px 0; }
+    .swatch{ width:16px; height:12px; border-radius:3px; border:1px solid rgba(0,0,0,.08); }
+    .legend .left{ display:flex; align-items:center; gap:8px; }
+    .legend small{ opacity:.75; }
 
     .panel{ border-top:1px solid #e6e6e6; padding:12px; background:#fff; }
     .panel h3{ margin:0 0 8px 0; font-size:14px; }
     .panel .sub{ font-size:12px; opacity:.75; margin-bottom:10px; }
 
-    table{ border-collapse:collapse; width:100%; max-width:820px; }
-    th, td{ text-align:left; padding:8px 10px; border-bottom:1px solid #eee; font-size:13px; vertical-align:top; }
+    table{ border-collapse:collapse; width:100%; max-width:980px; }
+    th, td{ text-align:left; padding:8px 10px; border-bottom:1px solid #eee; font-size:13px; vertical-align:middle; }
     th{ font-size:12px; opacity:.8; text-transform:uppercase; letter-spacing:.02em; }
     .tag{ display:inline-block; font-size:11px; padding:2px 8px; border-radius:999px; background:#f2f4f7; margin-left:8px; }
     .muted{ opacity:.75; }
     tr.clickable{ cursor:pointer; }
     tr.clickable:hover{ background:#f7f9fc; }
+
+    .spark {
+      width: 160px; height: 18px;
+      display: inline-block;
+      vertical-align: middle;
+    }
+    .spark text { font-size: 10px; opacity: .8; }
   </style>
 </head>
 <body>
@@ -55,6 +70,9 @@
       </select>
     </label>
 
+    <button id="exportPng" title="Térkép exportálása PNG-be">PNG export</button>
+
+    <span class="spacer"></span>
     <span class="note">Forrás: Eurostat / Comext – Q3 2025</span>
   </div>
 
@@ -71,10 +89,19 @@
 
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/papaparse@5.4.1/papaparse.min.js"></script>
+  <!-- PNG export (Leaflet-image) -->
+  <script src="https://unpkg.com/leaflet-image/leaflet-image.js"></script>
 
   <script>
+    // ======= Alaptérkép (CORS-barát tile, hogy PNG export működjön) =======
     const map = L.map('map').setView([54, 15], 3);
-    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { attribution: '© OpenStreetMap' }).addTo(map);
+
+    // Carto basemap általában CORS-kompatibilis; exportnál fontos a crossOrigin.
+    L.tileLayer('https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png', {
+      attribution: '© OpenStreetMap • © CARTO',
+      subdomains: 'abcd',
+      crossOrigin: true
+    }).addTo(map);
 
     let countriesGeoJSON = null;
     let energyRows = [];
@@ -82,7 +109,6 @@
 
     // ISO2 -> Leaflet layer (TOP listából zoomhoz)
     const isoLayerMap = new Map();
-
     // TOP fallback markerek
     const topFallbackMarkers = new Map();
 
@@ -91,6 +117,7 @@
     const topTitle = document.getElementById('topTitle');
     const topSub   = document.getElementById('topSub');
     const topBox   = document.getElementById('top5');
+    const exportBtn = document.getElementById('exportPng');
 
     // ISO2 fallback mapping (név -> kód)
     const ISO_FALLBACK = {
@@ -131,6 +158,10 @@
       "LY":[26.3351, 17.2283],
       "KZ":[48.0196, 66.9237]
     };
+
+    // ======= Choropleth (fix 5 sáv) =======
+    // 5 kategória szín (világos -> sötét)
+    const CHORO_COLORS = ['#e8f1ff', '#bfd7ff', '#86b4ff', '#3f86ff', '#0b3fbf']; // 5 sáv
 
     function num(x){
       const v = Number(String(x ?? '').replace(',', '.'));
@@ -175,19 +206,6 @@
         : (v.toFixed(2) + ' Mt');
     }
 
-    function getScale(values){
-      const vs = values.filter(v => v != null).sort((a,b)=>a-b);
-      if (vs.length === 0) return {min:0, max:1};
-      const min = vs[0], max0 = vs[vs.length-1];
-      return {min, max:(max0 === min ? min + 1 : max0)};
-    }
-
-    function shade(val, min, max){
-      if (val == null) return 0.08;
-      const t = Math.max(0, Math.min(1, (val - min) / (max - min)));
-      return 0.25 + 0.65 * t;
-    }
-
     function noDataExplanation(chosenType){
       const t = chosenType === 'ALL' ? 'az adott energiatípus(ok)ban' : `(${chosenType})`;
       return `EU-import: nincs regisztrált szállítás ${t} a vizsgált időszakban (Q3 2025).`;
@@ -213,6 +231,39 @@
       return { value: any ? sum : null, breakdown: items };
     }
 
+    // Kvantilis küszöbök 5 sávhoz (q20/q40/q60/q80)
+    function quantile(sortedVals, q){
+      if (sortedVals.length === 0) return null;
+      const pos = (sortedVals.length - 1) * q;
+      const base = Math.floor(pos);
+      const rest = pos - base;
+      if (sortedVals[base + 1] === undefined) return sortedVals[base];
+      return sortedVals[base] + rest * (sortedVals[base + 1] - sortedVals[base]);
+    }
+
+    function buildBreaks(values){
+      const vs = values.filter(v => v != null).sort((a,b)=>a-b);
+      if (vs.length === 0) return [0,0,0,0,0,0];
+      const b1 = quantile(vs, 0.2);
+      const b2 = quantile(vs, 0.4);
+      const b3 = quantile(vs, 0.6);
+      const b4 = quantile(vs, 0.8);
+      const min = vs[0];
+      const max = vs[vs.length-1];
+      // breaks: [min, b1, b2, b3, b4, max]
+      return [min, b1, b2, b3, b4, max];
+    }
+
+    function colorForValue(val, breaks){
+      if (val == null) return '#f6f7f9'; // "no data"
+      // breaks: 6 elem (min, b1, b2, b3, b4, max)
+      if (val <= breaks[1]) return CHORO_COLORS[0];
+      if (val <= breaks[2]) return CHORO_COLORS[1];
+      if (val <= breaks[3]) return CHORO_COLORS[2];
+      if (val <= breaks[4]) return CHORO_COLORS[3];
+      return CHORO_COLORS[4];
+    }
+
     function getTop5(idx){
       const metric = metricSel.value;
       const chosenType = typeSel.value;
@@ -230,47 +281,6 @@
       const top = totals.slice(0, 5);
       const topSet = new Set(top.map(x => x[0]));
       return { top, topSet };
-    }
-
-    function renderTop5(top, nameMap){
-      const metric = metricSel.value;
-      const chosenType = typeSel.value;
-      const typeText = chosenType === 'ALL' ? 'Összes energiatípus' : chosenType;
-
-      topTitle.textContent = 'TOP 5 beszállító';
-      topSub.textContent = `${typeText} • ${metricLabel(metric)} • Q3 2025`;
-
-      if (top.length === 0){
-        topBox.innerHTML = `<div class="muted">Nincs megjeleníthető TOP lista a jelenlegi szűrőkkel.</div>`;
-        return;
-      }
-
-      const rowsHtml = top.map(([iso2, v], i) => {
-        const name = nameMap.get(iso2) || iso2;
-        return `
-          <tr class="clickable" data-iso2="${iso2}">
-            <td><b>${i+1}.</b></td>
-            <td><b>${name}</b> <span class="tag">${iso2}</span></td>
-            <td><b>${formatMetric(v, metric)}</b></td>
-          </tr>
-        `;
-      }).join('');
-
-      topBox.innerHTML = `
-        <table>
-          <thead>
-            <tr><th>#</th><th>Ország</th><th>${metricLabel(metric)}</th></tr>
-          </thead>
-          <tbody>${rowsHtml}</tbody>
-        </table>
-      `;
-
-      topBox.querySelectorAll('tr.clickable').forEach(tr => {
-        tr.addEventListener('click', () => {
-          const iso2 = tr.getAttribute('data-iso2');
-          focusCountry(iso2);
-        });
-      });
     }
 
     function clearTopFallbackMarkers(){
@@ -299,23 +309,132 @@
       alert('Ehhez az országhoz nem találok térképi objektumot és nincs fallback koordináta.');
     }
 
+    // Mini oszlopdiagram (SVG) TOP 5-höz
+    function sparkBarSvg(value, maxValue){
+      const w = 160, h = 18;
+      const pad = 2;
+      const frac = (maxValue > 0) ? (value / maxValue) : 0;
+      const barW = Math.max(2, Math.round((w - pad*2) * frac));
+      return `
+        <svg class="spark" viewBox="0 0 ${w} ${h}" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+          <rect x="0" y="0" width="${w}" height="${h}" rx="4" fill="#f2f4f7"></rect>
+          <rect x="${pad}" y="${pad}" width="${barW}" height="${h - pad*2}" rx="3" fill="#0b3fbf"></rect>
+        </svg>
+      `;
+    }
+
+    function renderTop5(top, nameMap){
+      const metric = metricSel.value;
+      const chosenType = typeSel.value;
+      const typeText = chosenType === 'ALL' ? 'Összes energiatípus' : chosenType;
+
+      topTitle.textContent = 'TOP 5 beszállító';
+      topSub.textContent = `${typeText} • ${metricLabel(metric)} • Q3 2025`;
+
+      if (top.length === 0){
+        topBox.innerHTML = `<div class="muted">Nincs megjeleníthető TOP lista a jelenlegi szűrőkkel.</div>`;
+        return;
+      }
+
+      const maxV = Math.max(...top.map(x => x[1]));
+
+      const rowsHtml = top.map(([iso2, v], i) => {
+        const name = nameMap.get(iso2) || iso2;
+        return `
+          <tr class="clickable" data-iso2="${iso2}">
+            <td><b>${i+1}.</b></td>
+            <td><b>${name}</b> <span class="tag">${iso2}</span></td>
+            <td>
+              <b>${formatMetric(v, metric)}</b><br>
+              ${sparkBarSvg(v, maxV)}
+            </td>
+          </tr>
+        `;
+      }).join('');
+
+      topBox.innerHTML = `
+        <table>
+          <thead>
+            <tr><th>#</th><th>Ország</th><th>${metricLabel(metric)} + trend</th></tr>
+          </thead>
+          <tbody>${rowsHtml}</tbody>
+        </table>
+      `;
+
+      topBox.querySelectorAll('tr.clickable').forEach(tr => {
+        tr.addEventListener('click', () => {
+          const iso2 = tr.getAttribute('data-iso2');
+          focusCountry(iso2);
+        });
+      });
+    }
+
+    function renderLegend(breaks, metric){
+      if (window._legend) window._legend.remove();
+
+      const legend = L.control({position:'bottomright'});
+      legend.onAdd = () => {
+        const div = L.DomUtil.create('div', 'legend');
+
+        function fmt(x){
+          if (x == null) return '–';
+          // rövid, de értelmezhető
+          if (metric === 'value_eur_bn') return '€' + x.toFixed(2) + 'b';
+          return x.toFixed(2) + ' Mt';
+        }
+
+        // 5 sáv: [min..b1], (b1..b2], (b2..b3], (b3..b4], (b4..max]
+        const rows = [
+          {c: CHORO_COLORS[0], a: breaks[0], b: breaks[1]},
+          {c: CHORO_COLORS[1], a: breaks[1], b: breaks[2]},
+          {c: CHORO_COLORS[2], a: breaks[2], b: breaks[3]},
+          {c: CHORO_COLORS[3], a: breaks[3], b: breaks[4]},
+          {c: CHORO_COLORS[4], a: breaks[4], b: breaks[5]},
+        ];
+
+        div.innerHTML = `
+          <div class="title">Choropleth (5 sáv)</div>
+          <small>${metricLabel(metric)}</small>
+          <div style="margin-top:8px">
+            ${rows.map(r => `
+              <div class="row">
+                <div class="left">
+                  <span class="swatch" style="background:${r.c}"></span>
+                  <span>${fmt(r.a)} – ${fmt(r.b)}</span>
+                </div>
+              </div>
+            `).join('')}
+            <div class="row" style="margin-top:6px;">
+              <div class="left">
+                <span class="swatch" style="background:#f6f7f9"></span>
+                <span class="muted">Nincs adat</span>
+              </div>
+            </div>
+          </div>
+        `;
+        return div;
+      };
+      legend.addTo(map);
+      window._legend = legend;
+    }
+
     function render(){
       const metric = metricSel.value;
       const chosenType = typeSel.value;
 
       const idx = buildIndex(energyRows);
       const nameMap = buildCountryNameMap(energyRows);
-
       const { top, topSet } = getTop5(idx);
 
-      const vals = [];
+      // értékek a choropleth töréspontokhoz
+      const values = [];
       const isoSetAll = new Set();
       for (const v of idx.values()) isoSetAll.add(v.iso2);
       for (const iso2 of isoSetAll){
         const { value } = computeForCountry(iso2, idx, metric, chosenType);
-        if (value != null) vals.push(value);
+        if (value != null && value > 0) values.push(value);
       }
-      const {min, max} = getScale(vals);
+      const breaks = buildBreaks(values);
 
       isoLayerMap.clear();
       clearTopFallbackMarkers();
@@ -338,8 +457,8 @@
           return {
             color: isTop ? '#000' : '#333',
             weight: isTop ? 2.5 : 1,
-            fillColor: '#0057b8',
-            fillOpacity: shade(value, min, max)
+            fillColor: colorForValue(value, breaks),
+            fillOpacity: 0.85
           };
         },
 
@@ -400,32 +519,20 @@
         }
       }).addTo(map);
 
-      // Legend
-      if (window._legend) window._legend.remove();
-      const legend = L.control({position:'bottomright'});
-      legend.onAdd = () => {
-        const div = L.DomUtil.create('div', 'legend');
-        div.innerHTML = `
-          <div><b>Színezés</b></div>
-          <div class="row"><span>min</span><span>${formatMetric(min, metric)}</span></div>
-          <div class="row"><span>max</span><span>${formatMetric(max, metric)}</span></div>
-        `;
-        return div;
-      };
-      legend.addTo(map);
-      window._legend = legend;
+      // Choropleth legenda (fix 5 sáv)
+      renderLegend(breaks, metric);
 
-      // TOP 5 panel
+      // TOP 5 panel + mini chart
       renderTop5(top, nameMap);
 
-      // TOP fallback markerek
+      // TOP fallback markerek (ha nincs polygon)
       for (const [iso2, v] of top){
         if (isoLayerMap.has(iso2)) continue;
         const latlng = CENTROID_FALLBACK[iso2];
         if (!latlng) continue;
 
         const m = L.circleMarker(latlng, {
-          radius:7, color:'#000', weight:2, fillColor:'#0057b8', fillOpacity:0.9
+          radius:7, color:'#000', weight:2, fillColor:'#0b3fbf', fillOpacity:0.95
         }).addTo(map)
           .bindPopup(`<b>${nameMap.get(iso2) || iso2}</b> <span class="tag">${iso2}</span><br>TOP 5 beszállító<br><b>${formatMetric(v, metricSel.value)}</b>`);
 
@@ -462,6 +569,33 @@
 
     metricSel.addEventListener('change', render);
     typeSel.addEventListener('change', render);
+
+    // ======= PNG export =======
+    exportBtn.addEventListener('click', () => {
+      exportBtn.disabled = true;
+      exportBtn.textContent = 'Export...';
+
+      // leafletImage: a tile layer CORS és crossOrigin mellett jó eséllyel működik
+      leafletImage(map, function(err, canvas) {
+        exportBtn.disabled = false;
+        exportBtn.textContent = 'PNG export';
+
+        if (err || !canvas) {
+          alert('Nem sikerült a PNG export. (Gyakori ok: böngésző CORS/canvas korlátozás.)');
+          return;
+        }
+
+        const a = document.createElement('a');
+        const metric = metricSel.value;
+        const type = typeSel.value;
+        const ts = new Date().toISOString().slice(0,10);
+        a.download = `eu-energy-map_${type}_${metric}_${ts}.png`;
+        a.href = canvas.toDataURL('image/png');
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+      });
+    });
 
     loadAll().catch(err => {
       console.error(err);
