@@ -50,6 +50,7 @@
   <script src="https://cdn.jsdelivr.net/npm/papaparse@5.4.1/papaparse.min.js"></script>
 
   <script>
+    // Alaptérkép
     const map = L.map('map').setView([54, 15], 3);
     L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
       attribution: '© OpenStreetMap'
@@ -156,34 +157,38 @@
           const name = p.ADMIN || p.name || 'Ország';
           const iso2 = String(p.ISO_A2 || '').trim().toUpperCase();
 
-          lyr.on('click', () => {
+          function tooltipHtml() {
             const metric = metricSel.value;
             const chosenType = typeSel.value;
             const idx = buildIndex(energyRows);
 
-            let lines = [];
-            if (!iso2 || iso2 === '-99') {
-              lines.push('Nincs ISO2 kód ehhez a területhez.');
-            } else if (chosenType === 'ALL') {
-              const items = [];
-              for (const v of idx.values()) if (v.iso2 === iso2) items.push(v);
-              items.sort((a,b)=> (b[metric]??-Infinity) - (a[metric]??-Infinity));
-              if (items.length === 0) {
-                lines.push('Nincs adat ehhez az országhoz.');
-              } else {
-                for (const it of items) {
-                  lines.push(`${it.energy_type}: <b>${formatMetric(it[metric], metric)}</b>`);
-                }
+            if (!iso2 || iso2 === '-99') return `<b>${name}</b><br>Nincs ISO2 kód.`;
+
+            if (chosenType === 'ALL') {
+              let sum = 0, any = false;
+              for (const v of idx.values()) {
+                if (v.iso2 !== iso2) continue;
+                if (v[metric] != null) { sum += v[metric]; any = true; }
               }
+              if (!any) return `<b>${name}</b> (${iso2})<br><i>Nincs adat</i>`;
+              return `<b>${name}</b> (${iso2})<br><b>Összes</b>: ${formatMetric(sum, metric)}`;
             } else {
               const it = idx.get(iso2 + '|' + chosenType);
-              if (!it) lines.push('Nincs adat ehhez az országhoz/energiatípushoz.');
-              else lines.push(`${chosenType}: <b>${formatMetric(it[metric], metric)}</b>`);
+              if (!it) return `<b>${name}</b> (${iso2})<br><i>Nincs adat</i>`;
+              return `<b>${name}</b> (${iso2})<br><b>${chosenType}</b>: ${formatMetric(it[metric], metric)}`;
             }
+          }
 
-            lyr.bindPopup(
-              `<b>${name}</b> (${iso2 || '–'})<br>` + lines.join('<br>')
-            ).openPopup();
+          // Hover tooltip
+          lyr.bindTooltip(tooltipHtml, { sticky: true, direction: 'auto', opacity: 0.95 });
+
+          // Hover kiemelés
+          lyr.on('mouseover', () => lyr.setStyle({ weight: 2 }));
+          lyr.on('mouseout', () => lyr.setStyle({ weight: 1 }));
+
+          // Kattintás popup
+          lyr.on('click', () => {
+            lyr.bindPopup(tooltipHtml()).openPopup();
           });
         }
       }).addTo(map);
