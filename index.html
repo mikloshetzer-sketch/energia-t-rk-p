@@ -80,10 +80,10 @@
     let energyRows = [];
     let layer = null;
 
-    // ISO2 -> Leaflet layer (hogy a TOP listából rá tudjunk zoomolni)
+    // ISO2 -> Leaflet layer (TOP listából zoomhoz)
     const isoLayerMap = new Map();
 
-    // TOP marker fallback (ha nincs polygon)
+    // TOP fallback markerek
     const topFallbackMarkers = new Map();
 
     const metricSel = document.getElementById('metric');
@@ -92,7 +92,7 @@
     const topSub   = document.getElementById('topSub');
     const topBox   = document.getElementById('top5');
 
-    // GeoJSON ISO2 hiány esetére (név -> ISO2)
+    // ISO2 fallback mapping (név -> kód)
     const ISO_FALLBACK = {
       "UNITED STATES OF AMERICA":"US",
       "UNITED STATES":"US",
@@ -111,20 +111,25 @@
       "BOLIVIA":"BO",
       "TANZANIA":"TZ",
       "SYRIA":"SY",
-      "CZECHIA":"CZ"
+      "CZECHIA":"CZ",
+      "LIBYA":"LY",
+      "LIBYAN ARAB JAMAHIRIYA":"LY",
+      "KAZAKHSTAN":"KZ",
+      "KAZAKSTAN":"KZ"
     };
 
-    // Ha polygon nincs: ide tesszük a TOP országok hozzávetőleges koordinátáját
-    // (csak akkor használjuk, ha tényleg nem találunk polygon layer-t)
+    // Fallback koordináták, ha nincs polygon
     const CENTROID_FALLBACK = {
-      "SA":[23.8859, 45.0792], // Saudi Arabia
-      "CN":[35.8617, 104.1954], // China
+      "SA":[23.8859, 45.0792],
+      "CN":[35.8617, 104.1954],
       "QA":[25.3548, 51.1839],
       "DZ":[28.0339, 1.6596],
       "NO":[60.4720, 8.4689],
       "US":[39.8283, -98.5795],
       "RU":[61.5240, 105.3188],
-      "AE":[23.4241, 53.8478] // UAE, ha előfordulna
+      "AE":[23.4241, 53.8478],
+      "LY":[26.3351, 17.2283],
+      "KZ":[48.0196, 66.9237]
     };
 
     function num(x){
@@ -159,18 +164,22 @@
       return m;
     }
 
-    function metricLabel(metric){ return metric === 'value_eur_bn' ? 'Érték (€ mrd)' : 'Mennyiség (Mt)'; }
+    function metricLabel(metric){
+      return metric === 'value_eur_bn' ? 'Érték (€ mrd)' : 'Mennyiség (Mt)';
+    }
 
     function formatMetric(v, metric){
       if (v == null) return '–';
-      return metric === 'value_eur_bn' ? ('€' + v.toFixed(2) + ' mrd') : (v.toFixed(2) + ' Mt');
+      return metric === 'value_eur_bn'
+        ? ('€' + v.toFixed(2) + ' mrd')
+        : (v.toFixed(2) + ' Mt');
     }
 
     function getScale(values){
       const vs = values.filter(v => v != null).sort((a,b)=>a-b);
       if (vs.length === 0) return {min:0, max:1};
       const min = vs[0], max0 = vs[vs.length-1];
-      return {min, max: (max0 === min ? min + 1 : max0)};
+      return {min, max:(max0 === min ? min + 1 : max0)};
     }
 
     function shade(val, min, max){
@@ -204,7 +213,6 @@
       return { value: any ? sum : null, breakdown: items };
     }
 
-    // TOP 5 számítás: visszaadja a listát + set-et a kiemeléshez
     function getTop5(idx){
       const metric = metricSel.value;
       const chosenType = typeSel.value;
@@ -220,7 +228,6 @@
 
       totals.sort((a,b)=> b[1] - a[1]);
       const top = totals.slice(0, 5);
-
       const topSet = new Set(top.map(x => x[0]));
       return { top, topSet };
     }
@@ -241,7 +248,7 @@
       const rowsHtml = top.map(([iso2, v], i) => {
         const name = nameMap.get(iso2) || iso2;
         return `
-          <tr class="clickable" data-iso2="${iso2}" data-rank="${i+1}">
+          <tr class="clickable" data-iso2="${iso2}">
             <td><b>${i+1}.</b></td>
             <td><b>${name}</b> <span class="tag">${iso2}</span></td>
             <td><b>${formatMetric(v, metric)}</b></td>
@@ -258,7 +265,6 @@
         </table>
       `;
 
-      // kattintás: zoom + popup
       topBox.querySelectorAll('tr.clickable').forEach(tr => {
         tr.addEventListener('click', () => {
           const iso2 = tr.getAttribute('data-iso2');
@@ -273,17 +279,15 @@
     }
 
     function focusCountry(iso2){
-      // 1) ha van polygon layer: odazoomol + popup
       const lyr = isoLayerMap.get(iso2);
       if (lyr){
-        try {
+        try{
           map.fitBounds(lyr.getBounds(), { padding:[30,30] });
           lyr.openPopup();
           return;
-        } catch(e) {}
+        }catch(e){}
       }
 
-      // 2) ha nincs polygon: fallback marker koordinátával
       const latlng = CENTROID_FALLBACK[iso2];
       if (latlng){
         map.setView(latlng, 4);
@@ -292,7 +296,7 @@
         return;
       }
 
-      alert('Ehhez az országhoz nem találok térképi objektumot (GeoJSON), és nincs fallback koordináta sem.');
+      alert('Ehhez az országhoz nem találok térképi objektumot és nincs fallback koordináta.');
     }
 
     function render(){
@@ -302,10 +306,8 @@
       const idx = buildIndex(energyRows);
       const nameMap = buildCountryNameMap(energyRows);
 
-      // TOP 5 előre (kiemeléshez is kell)
       const { top, topSet } = getTop5(idx);
 
-      // skála
       const vals = [];
       const isoSetAll = new Set();
       for (const v of idx.values()) isoSetAll.add(v.iso2);
@@ -315,7 +317,6 @@
       }
       const {min, max} = getScale(vals);
 
-      // régi rétegek törlése
       isoLayerMap.clear();
       clearTopFallbackMarkers();
       if (layer) layer.remove();
@@ -332,7 +333,6 @@
           }
 
           const { value } = computeForCountry(iso2, idx, metric, chosenType);
-
           const isTop = topSet.has(iso2);
 
           return {
@@ -353,7 +353,6 @@
             iso2 = ISO_FALLBACK[key] || '';
           }
 
-          // eltároljuk a layer-t, hogy a TOP listából rá tudjunk ugrani
           if (iso2 && !isoLayerMap.has(iso2)) isoLayerMap.set(iso2, lyr);
 
           const displayName = (iso2 && nameMap.get(iso2)) ? nameMap.get(iso2) : featureName;
@@ -419,16 +418,17 @@
       // TOP 5 panel
       renderTop5(top, nameMap);
 
-      // TOP 5 fallback markerek azoknak, akiknél nincs polygon layer
+      // TOP fallback markerek
       for (const [iso2, v] of top){
         if (isoLayerMap.has(iso2)) continue;
-
         const latlng = CENTROID_FALLBACK[iso2];
         if (!latlng) continue;
 
-        const m = L.circleMarker(latlng, { radius: 7, color:'#000', weight:2, fillColor:'#0057b8', fillOpacity:0.9 })
-          .addTo(map)
+        const m = L.circleMarker(latlng, {
+          radius:7, color:'#000', weight:2, fillColor:'#0057b8', fillOpacity:0.9
+        }).addTo(map)
           .bindPopup(`<b>${nameMap.get(iso2) || iso2}</b> <span class="tag">${iso2}</span><br>TOP 5 beszállító<br><b>${formatMetric(v, metricSel.value)}</b>`);
+
         topFallbackMarkers.set(iso2, m);
       }
     }
