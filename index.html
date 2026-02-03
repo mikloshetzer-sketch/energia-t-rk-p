@@ -63,6 +63,28 @@
     const metricSel = document.getElementById('metric');
     const typeSel   = document.getElementById('energyType');
 
+    // ISO2 fallback mapping (ha a GeoJSON nem ad kódot)
+    const ISO_FALLBACK = {
+      "UNITED STATES OF AMERICA": "US",
+      "UNITED STATES": "US",
+      "RUSSIA": "RU",
+      "UNITED KINGDOM": "GB",
+      "GREAT BRITAIN": "GB",
+      "NORWAY": "NO",
+      "QATAR": "QA",
+      "ALGERIA": "DZ",
+      "SOUTH KOREA": "KR",
+      "IRAN": "IR",
+      "VIETNAM": "VN",
+      "VENEZUELA": "VE",
+      "BOLIVIA": "BO",
+      "TANZANIA": "TZ",
+      "SYRIA": "SY",
+      "CZECHIA": "CZ",
+      "EGYPT": "EG",
+      "NETHERLANDS": "NL"
+    };
+
     function num(x) {
       const v = Number(String(x ?? '').replace(',', '.'));
       return Number.isFinite(v) ? v : null;
@@ -124,10 +146,12 @@
       layer = L.geoJSON(countriesGeoJSON, {
         style: (feature) => {
           const p = feature.properties || {};
-          const iso2 = String(p.ISO_A2 || '').trim().toUpperCase();
+          const name = p.ADMIN || p.name || '';
+          let iso2 = String(p.ISO_A2 || '').trim().toUpperCase();
 
           if (!iso2 || iso2 === '-99') {
-            return {color:'#666', weight:1, fillOpacity:0.05};
+            const key = String(name).toUpperCase();
+            iso2 = ISO_FALLBACK[key] || '';
           }
 
           let val = null;
@@ -155,14 +179,19 @@
         onEachFeature: (feature, lyr) => {
           const p = feature.properties || {};
           const name = p.ADMIN || p.name || 'Ország';
-          const iso2 = String(p.ISO_A2 || '').trim().toUpperCase();
+          let iso2 = String(p.ISO_A2 || '').trim().toUpperCase();
+
+          if (!iso2 || iso2 === '-99') {
+            const key = String(name).toUpperCase();
+            iso2 = ISO_FALLBACK[key] || '';
+          }
 
           function tooltipHtml() {
             const metric = metricSel.value;
             const chosenType = typeSel.value;
             const idx = buildIndex(energyRows);
 
-            if (!iso2 || iso2 === '-99') return `<b>${name}</b><br>Nincs ISO2 kód.`;
+            if (!iso2) return `<b>${name}</b><br><i>Nincs adat</i>`;
 
             if (chosenType === 'ALL') {
               let sum = 0, any = false;
@@ -226,7 +255,10 @@
         });
       });
 
-      const types = Array.from(new Set(energyRows.map(r => String(r.energy_type || '').trim()).filter(Boolean))).sort();
+      const types = Array.from(new Set(
+        energyRows.map(r => String(r.energy_type || '').trim()).filter(Boolean)
+      )).sort();
+
       for (const t of types) {
         const opt = document.createElement('option');
         opt.value = t;
@@ -237,9 +269,12 @@
       render();
     }
 
+    metricSel.addEventListener('change', render);
+    typeSel.addEventListener('change', render);
+
     loadAll().catch(err => {
       console.error(err);
-      alert('Hiba betöltés közben. Ellenőrizd, hogy energy_data.csv fent van-e a repó root-jában.');
+      alert('Hiba betöltés közben. Ellenőrizd, hogy energy_data.csv fent van-e a repó gyökerében.');
     });
   </script>
 </body>
